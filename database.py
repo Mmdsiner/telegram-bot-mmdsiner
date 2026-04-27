@@ -1,14 +1,9 @@
-import aiosqlite
+import os
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-DB_NAME = "bot.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-async def execute(query, *args):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(query, args)
-        await db.commit()
-
-async def fetch(query, *args):
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(query, args)
-        rows = await cursor.fetchall()
-        return rows
+engine = create_async_engine(DATABASE_URL, echo=False)
+SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+Base = declarative_base()
