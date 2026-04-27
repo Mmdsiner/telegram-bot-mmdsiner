@@ -1,12 +1,13 @@
 from aiogram import Router, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
 
 from database import SessionLocal
 from models import User, Order
-from keyboards import main_menu
+from keyboards import main_menu, receipt_kb
 from services import calc_price
-from config import SUPPORT_ID
+from config import SUPPORT_ID, ADMIN_ID
 from states import BuyState
 
 router = Router()
@@ -15,7 +16,7 @@ router = Router()
 async def start(message: types.Message):
     ref_id = None
     args = message.text.split()
-    if len(args) > 1:
+    if len(args) > 1 and args[1].isdigit():
         ref_id = int(args[1])
 
     async with SessionLocal() as session:
@@ -50,7 +51,32 @@ async def process_count(message: types.Message, state: FSMContext):
 
 @router.message(lambda m: m.photo)
 async def receipt(message: types.Message):
-    await message.answer("رسید ثبت شد")
+    photo_id = message.photo[-1].file_id
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Order).where(
+                Order.user_id == message.from_user.id,
+                Order.status == "pending"
+            )
+        )
+        order = result.scalar()
+
+        if not order:
+            await message.answer("سفارشی پیدا نشد")
+            return
+
+        order.receipt = photo_id
+        await session.commit()
+
+        await message.answer("رسید ثبت شد")
+
+        await message.bot.send_photo(
+            ADMIN_ID,
+            photo=photo_id,
+            caption=f"سفارش #{order.id}\nکاربر: {message.from_user.id}\nمبلغ: {order.amount}",
+            reply_markup=receipt_kb(order.id)
+        )
 
 @router.message(lambda m: m.text == "پشتیبانی")
 async def support(message: types.Message):
