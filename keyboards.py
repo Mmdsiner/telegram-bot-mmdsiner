@@ -1,4 +1,5 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def main_menu():
     return ReplyKeyboardMarkup(
@@ -18,4 +19,14 @@ def admin_menu():
             [KeyboardButton(text="تنظیم تخفیف")]
         ],
         resize_keyboard=True
+    )
+
+def receipt_kb(order_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ تایید", callback_data=f"ok_{order_id}"),
+                InlineKeyboardButton(text="❌ رد", callback_data=f"no_{order_id}")
+            ]
+        ]
     )
