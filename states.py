@@ -1,4 +1,9 @@
 from aiogram.fsm.state import StatesGroup, State
 
 class BuyState(StatesGroup):
-    amount = State()
+    count = State()
+
+class AdminState(StatesGroup):
+    price = State()
+    card = State()
+    discount = State()
