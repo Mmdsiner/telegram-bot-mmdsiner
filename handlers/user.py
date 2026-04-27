@@ -1,63 +1,57 @@
 from aiogram import Router, types
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 
-from config import ADMIN_ID
 from database import SessionLocal
-from services import set_setting
-from keyboards import admin_menu
-from states import AdminState
+from models import User, Order
+from keyboards import main_menu
+from services import calc_price
+from config import SUPPORT_ID
+from states import BuyState
 
 router = Router()
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
-@router.message(lambda m: m.from_user.id == ADMIN_ID)
-async def admin_panel(message: types.Message):
-    await message.answer("پنل ادمین", reply_markup=admin_menu())
-
-@router.message(lambda m: m.text == "تنظیم قیمت معمولی")
-async def set_normal(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    await state.set_state(AdminState.price)
-    await message.answer("قیمت جدید:")
-
-@router.message(AdminState.price)
-async def save_price(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
+@router.message(CommandStart())
+async def start(message: types.Message):
+    ref_id = None
+    args = message.text.split()
+    if len(args) > 1:
+        ref_id = int(args[1])
 
     async with SessionLocal() as session:
-        await set_setting(session, "normal_price", message.text)
+        user = await session.get(User, message.from_user.id)
+        if not user:
+            user = User(id=message.from_user.id, invited_by=ref_id)
+            session.add(user)
+            await session.commit()
 
-    await state.clear()
-    await message.answer("ثبت شد")
+    await message.answer("خوش اومدی", reply_markup=main_menu())
 
-@router.message(lambda m: m.text == "تنظیم کارت")
-async def set_card(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
+@router.message(lambda m: m.text == "خرید سرویس")
+async def buy(message: types.Message, state: FSMContext):
+    await state.set_state(BuyState.count)
+    await message.answer("تعداد گیگ رو وارد کن")
+
+@router.message(BuyState.count)
+async def process_count(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
         return
-    await state.set_state(AdminState.card)
-    await message.answer("شماره کارت:")
 
-@router.message(AdminState.card)
-async def save_card(message: types.Message, state: FSMContext):
+    count = int(message.text)
+
     async with SessionLocal() as session:
-        await set_setting(session, "card", message.text)
+        total = await calc_price(session, "normal", count)
+        order = Order(user_id=message.from_user.id, amount=total, status="pending")
+        session.add(order)
+        await session.commit()
 
     await state.clear()
-    await message.answer("ثبت شد")
+    await message.answer(f"مبلغ: {total}\nرسید رو ارسال کن")
 
-@router.message(lambda m: m.text == "تنظیم تخفیف")
-async def set_discount(message: types.Message, state: FSMContext):
-    await state.set_state(AdminState.discount)
-    await message.answer("درصد تخفیف:")
+@router.message(lambda m: m.photo)
+async def receipt(message: types.Message):
+    await message.answer("رسید ثبت شد")
 
-@router.message(AdminState.discount)
-async def save_discount(message: types.Message, state: FSMContext):
-    async with SessionLocal() as session:
-        await set_setting(session, "discount", message.text)
-
-    await state.clear()
-    await message.answer("ثبت شد")
+@router.message(lambda m: m.text == "پشتیبانی")
+async def support(message: types.Message):
+    await message.answer(f"{SUPPORT_ID}")
