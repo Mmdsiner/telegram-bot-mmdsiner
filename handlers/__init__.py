@@ -1,1 +1,1 @@
-from . import user, admin, payment
+from . import user, admin
