@@ -18,5 +18,5 @@ class Order(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger)
     amount = Column(Integer)
-    status = Column(String)  # pending / paid / rejected
+    status = Column(String)
     receipt = Column(String)
