@@ -1,83 +1,128 @@
-from aiogram import Router, types
-from aiogram.filters import CommandStart
+from aiogram import Router, F
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
-from sqlalchemy import select
-
+from aiogram.fsm.state import State, StatesGroup
+from config import ADMIN_ID
 from database import SessionLocal
-from models import User, Order
-from keyboards import main_menu, receipt_kb
-from services import calc_price
-from config import SUPPORT_ID, ADMIN_ID
-from states import BuyState
 
 router = Router()
 
-@router.message(CommandStart())
-async def start(message: types.Message):
-    ref_id = None
-    args = message.text.split()
-    if len(args) > 1 and args[1].isdigit():
-        ref_id = int(args[1])
+# ================== KEYBOARDS ==================
 
-    async with SessionLocal() as session:
-        user = await session.get(User, message.from_user.id)
-        if not user:
-            user = User(id=message.from_user.id, invited_by=ref_id)
-            session.add(user)
-            await session.commit()
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="خرید سرویس")],
+        [KeyboardButton(text="پشتیبانی")]
+    ],
+    resize_keyboard=True
+)
 
-    await message.answer("خوش اومدی", reply_markup=main_menu())
+service_type_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="سرویس معمولی")],
+        [KeyboardButton(text="سرویس ویژه")],
+        [KeyboardButton(text="🔙 برگشت")]
+    ],
+    resize_keyboard=True
+)
 
-@router.message(lambda m: m.text == "خرید سرویس")
-async def buy(message: types.Message, state: FSMContext):
-    await state.set_state(BuyState.count)
-    await message.answer("تعداد گیگ رو وارد کن")
+back_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔙 برگشت")]
+    ],
+    resize_keyboard=True
+)
 
-@router.message(BuyState.count)
-async def process_count(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return
+# ================== STATES ==================
 
-    count = int(message.text)
+class BuyState(StatesGroup):
+    choosing_type = State()
+    entering_amount = State()
+    sending_receipt = State()
 
-    async with SessionLocal() as session:
-        total = await calc_price(session, "normal", count)
-        order = Order(user_id=message.from_user.id, amount=total, status="pending")
-        session.add(order)
-        await session.commit()
+# ================== HANDLERS ==================
 
+@router.message(F.text == "/start")
+async def start(msg: Message):
+    await msg.answer("خوش اومدی 👋", reply_markup=main_menu)
+
+
+@router.message(F.text == "خرید سرویس")
+async def buy_service(msg: Message, state: FSMContext):
+    await state.set_state(BuyState.choosing_type)
+    await msg.answer("نوع سرویس رو انتخاب کن:", reply_markup=service_type_kb)
+
+
+@router.message(F.text == "🔙 برگشت")
+async def back(msg: Message, state: FSMContext):
     await state.clear()
-    await message.answer(f"مبلغ: {total}\nرسید رو ارسال کن")
+    await msg.answer("بازگشت به منو", reply_markup=main_menu)
 
-@router.message(lambda m: m.photo)
-async def receipt(message: types.Message):
-    photo_id = message.photo[-1].file_id
 
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(Order).where(
-                Order.user_id == message.from_user.id,
-                Order.status == "pending"
-            )
-        )
-        order = result.scalar()
+@router.message(BuyState.choosing_type, F.text.in_(["سرویس معمولی", "سرویس ویژه"]))
+async def choose_type(msg: Message, state: FSMContext):
+    await state.update_data(service_type=msg.text)
+    await state.set_state(BuyState.entering_amount)
 
-        if not order:
-            await message.answer("سفارشی پیدا نشد")
-            return
+    await msg.answer("چند گیگ میخوای؟ عدد بفرست:", reply_markup=back_kb)
 
-        order.receipt = photo_id
-        await session.commit()
 
-        await message.answer("رسید ثبت شد")
+@router.message(BuyState.entering_amount, F.text.regexp(r"^\d+$"))
+async def calculate_price(msg: Message, state: FSMContext):
+    data = await state.get_data()
 
-        await message.bot.send_photo(
-            ADMIN_ID,
-            photo=photo_id,
-            caption=f"سفارش #{order.id}\nکاربر: {message.from_user.id}\nمبلغ: {order.amount}",
-            reply_markup=receipt_kb(order.id)
-        )
+    amount = int(msg.text)
+    service_type = data.get("service_type")
 
-@router.message(lambda m: m.text == "پشتیبانی")
-async def support(message: types.Message):
-    await message.answer(f"{SUPPORT_ID}")
+    # قیمت نمونه (بعدا از دیتابیس بخون)
+    price_per_gb = 400000 if service_type == "سرویس معمولی" else 600000
+    total = amount * price_per_gb
+
+    await state.update_data(amount=amount, total=total)
+
+    text = f"""
+🧾 فاکتور خرید
+
+📦 نوع سرویس: {service_type}
+📊 مقدار: {amount} گیگ
+💰 قیمت هر گیگ: {price_per_gb:,} تومان
+
+━━━━━━━━━━━━━━━
+💵 مبلغ کل: {total:,} تومان
+━━━━━━━━━━━━━━━
+
+لطفا رسید رو ارسال کن 📩
+"""
+
+    await state.set_state(BuyState.sending_receipt)
+    await msg.answer(text)
+
+
+@router.message(BuyState.sending_receipt, F.photo)
+async def receive_receipt(msg: Message, state: FSMContext):
+    data = await state.get_data()
+
+    caption = f"""
+📥 سفارش جدید
+
+👤 USER_ID: {msg.from_user.id}
+💰 مبلغ: {data.get("total")}
+📦 نوع: {data.get("service_type")}
+"""
+
+    from handlers.admin import confirm_kb
+
+    await msg.bot.send_photo(
+        ADMIN_ID,
+        msg.photo[-1].file_id,
+        caption=caption,
+        reply_markup=confirm_kb
+    )
+
+    await msg.answer("رسید ارسال شد ✅ منتظر تایید ادمین باش")
+    await state.clear()
+
+
+@router.message(F.text == "پشتیبانی")
+async def support(msg: Message):
+    await msg.answer("پشتیبانی:\n@mmdsiner")
